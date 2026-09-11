@@ -41,6 +41,22 @@ namespace help {
 		else if(cmdName == "gpro-led") return KeyboardFeatures::gpro;
 		return KeyboardFeatures::all;
 	}
+
+	KeyboardFeatures getKeyboardFeatures(LedKeyboard::KeyboardModel model) {
+		switch (model) {
+			case LedKeyboard::KeyboardModel::g213: return KeyboardFeatures::g213;
+			case LedKeyboard::KeyboardModel::g410: return KeyboardFeatures::g410;
+			case LedKeyboard::KeyboardModel::g413: return KeyboardFeatures::g413;
+			case LedKeyboard::KeyboardModel::g512: return KeyboardFeatures::g512;
+			case LedKeyboard::KeyboardModel::g513: return KeyboardFeatures::g513;
+			case LedKeyboard::KeyboardModel::g610: return KeyboardFeatures::g610;
+			case LedKeyboard::KeyboardModel::g810: return KeyboardFeatures::g810;
+			case LedKeyboard::KeyboardModel::g815: return KeyboardFeatures::g815;
+			case LedKeyboard::KeyboardModel::g910: return KeyboardFeatures::g910;
+			case LedKeyboard::KeyboardModel::gpro: return KeyboardFeatures::gpro;
+			default: return KeyboardFeatures::none;
+		}
+	}
 	
 	
 	void usage(char *arg0) {
@@ -297,7 +313,7 @@ namespace help {
 			cout<<"target value :\t\t\t\tall, keys (all is for compatibility with other keyboard models)"<<endl;
 		if((features | KeyboardFeatures::rgb) == features)
 			cout<<"color formats :\t\t\t\tRRGGBB (hex value for red, green and blue)"<<endl;
-		else if((features | KeyboardFeatures::rgb) == features)
+		else if((features | KeyboardFeatures::intensity) == features)
 			cout<<"color formats :\t\t\t\tII (hex value for intensity)"<<endl;
 		cout<<"period formats :\t\t\tDms (decimal integer; units of milliseconds)"<<endl;
 		cout<<"                \t\t\tDs  (decimal integer; units of seconds)"<<endl;

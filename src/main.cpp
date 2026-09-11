@@ -130,7 +130,11 @@ int setFX(LedKeyboard &kbd, LedKeyboard::NativeEffectStorage storage,
 
 	switch (effect) {
 		case LedKeyboard::NativeEffect::off:
+			break;
 		case LedKeyboard::NativeEffect::ripple:
+			// Optional, but when given it must reach the keyboard: the
+			// GUI writes "fx ripple keys <n>ms" and honours it.
+			if (arg4 != "" && ! utils::parsePeriod(arg4, period)) return 1;
 			break;
 		case LedKeyboard::NativeEffect::color:
 			if (! utils::parseColor(arg4, color)) return 1;
@@ -217,9 +221,12 @@ int parseProfile(LedKeyboard &kbd, std::istream &stream) {
 			} else if (args[0] == "k" && args.size() > 2) {
 				LedKeyboard::Key key;
 				LedKeyboard::Color color;
-				if (utils::parseKey(args[1], key))
-					if (utils::parseColor(args[2], color))
-						keys.push_back({ key, color });
+				// Every other command reports a parse failure; without
+				// this one a typo'd key or colour applies a partly wrong
+				// scheme and still exits 0.
+				if (!utils::parseKey(args[1], key) ||
+				    !utils::parseColor(args[2], color)) retval = 1;
+				else keys.push_back({ key, color });
 			} else if (args[0] == "r" && args.size() > 2) {
 				if (setRegion(kbd, args[1], args[2]) == 1) retval = 1;
 			} else if (args[0] == "mr" && args.size() > 1) {
@@ -236,6 +243,9 @@ int parseProfile(LedKeyboard &kbd, std::istream &stream) {
 				if (setFX(kbd, args[1], args[2], args[3], args[4]) == 1) retval = 1;
 			} else if (args[0] == "fx" && args.size() > 3) {
 				if (setFX(kbd, args[1], args[2], args[3]) == 1) retval = 1;
+			} else if (args[0] == "fx" && args.size() > 2) {
+				// "fx off keys" carries no color or period.
+				if (setFX(kbd, args[1], args[2]) == 1) retval = 1;
 			}
 		}
 	}
@@ -357,10 +367,17 @@ int main(int argc, char **argv) {
 			return setFX(kbd, argv[argIndex + 1], argv[argIndex + 2], argv[argIndex + 3], argv[argIndex + 4]);
 		else if (argc > (argIndex + 3) && arg == "-fx")
 			return setFX(kbd, argv[argIndex + 1], argv[argIndex + 2], argv[argIndex + 3]);
+		// "-fx {effect} {target}" is the documented form for the effects
+		// that take neither a colour nor a period (off, ripple), but it
+		// used to fall through to the usage screen.
+		else if (argc > (argIndex + 2) && arg == "-fx")
+			return setFX(kbd, argv[argIndex + 1], argv[argIndex + 2]);
 		else if (argc > (argIndex + 4) && arg == "-fx-store")
 			return storeFX(kbd, argv[argIndex + 1], argv[argIndex + 2], argv[argIndex + 3], argv[argIndex + 4]);
 		else if (argc > (argIndex + 3) && arg == "-fx-store")
 			return storeFX(kbd, argv[argIndex + 1], argv[argIndex + 2], argv[argIndex + 3]);
+		else if (argc > (argIndex + 2) && arg == "-fx-store")
+			return storeFX(kbd, argv[argIndex + 1], argv[argIndex + 2]);
 		else if (argc > (argIndex + 1) && arg == "--startup-mode") return setStartupMode(kbd, argv[argIndex + 1]);
 		else if (argc > (argIndex + 1) && arg == "--on-board-mode") return setOnBoardMode(kbd, argv[argIndex + 1]);
 		else { help::usage(argv[0]); return 1; }

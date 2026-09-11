@@ -55,6 +55,26 @@ class LedKeyboard {
 			{ 0x46d, 0xc331, (uint16_t)KeyboardModel::g810 },
 			{ 0x46d, 0xc337, (uint16_t)KeyboardModel::g810 },
 			{ 0x46d, 0xc33f, (uint16_t)KeyboardModel::g815 },
+			// The G915, reached through its Lightspeed receiver. It is
+			// the G815's wireless sibling and speaks the same protocol —
+			// once the packets are addressed where this keyboard keeps
+			// its features rather than where a G815 does, which is what
+			// discoverFeatures() is for.
+			{ 0x46d, 0x407c, (uint16_t)KeyboardModel::g815 },
+			// Its Bluetooth identity stays out. It is the G815's wireless
+			// sibling and answers on 0xb354 over Bluetooth and 0x407c
+			// through its Lightspeed receiver, and both were tried: every
+			// write is accepted and the keyboard carries on showing its
+			// own on-board preset. This table means "the library can
+			// drive it", so listing it here would put a target in front
+			// of the user that quietly does nothing.
+			//
+			// The cause looks like the device index. Every packet here
+			// goes out as 0x11 0xff ..., and that 0xff addresses the
+			// receiver rather than the keyboard paired to it; a wired
+			// keyboard is the only device on its own link, so it never
+			// mattered before. Driving one of these means addressing it
+			// by its real index, which is work this table cannot express.
 			{ 0x46d, 0xc32b, (uint16_t)KeyboardModel::g910 },
 			{ 0x46d, 0xc335, (uint16_t)KeyboardModel::g910 },
 			{ 0x46d, 0xc339, (uint16_t)KeyboardModel::gpro }
@@ -164,6 +184,12 @@ class LedKeyboard {
 		typedef struct {
 			uint16_t vendorID = 0x0;
 			uint16_t productID = 0x0;
+			// How it is attached. A wireless keyboard reached over
+			// Bluetooth takes every lighting write and does nothing with
+			// it — the transport accepts the report and the firmware
+			// ignores it — so the difference has to be visible to anyone
+			// deciding whether this device can be driven.
+			bool bluetooth = false;
 			std::string manufacturer = "";
 			std::string product = "";
 			std::string serialNumber = "";
@@ -202,6 +228,7 @@ class LedKeyboard {
 		bool setKeys(KeyValueArray keyValues);
 		bool setGroupKeys(KeyGroup keyGroup, Color color);
 		bool setAllKeys(Color color);
+		static std::vector<Key> keysForGroup(KeyGroup keyGroup);
 		
 		bool setMRKey(uint8_t value);
 		bool setMNKey(uint8_t value);
@@ -222,50 +249,31 @@ class LedKeyboard {
 		typedef std::vector<Key> KeyArray;
 		
 		
-		const KeyArray keyGroupLogo = { Key::logo, Key::logo2 };
-		const KeyArray keyGroupIndicators = { Key::caps, Key::num, Key::scroll, Key::game, Key::backlight };
-		const KeyArray keyGroupMultimedia = { Key::next, Key::prev, Key::stop, Key::play, Key::mute };
-		const KeyArray keyGroupGKeys = { Key::g1, Key::g2, Key::g3, Key::g4, Key::g5, Key::g6, Key::g7, Key::g8, Key::g9 };
-		const KeyArray keyGroupFKeys = {
-			Key::f1, Key::f2, Key::f3, Key::f4, Key::f5, Key::f6, 
-			Key::f7, Key::f8, Key::f9, Key::f10, Key::f11, Key::f12 
-		};
-		const KeyArray keyGroupModifiers = {
-			Key::shift_left, Key::ctrl_left, Key::win_left, Key::alt_left, 
-			Key::alt_right, Key::win_right, Key::ctrl_right, Key::shift_right, Key::menu };
-		const KeyArray keyGroupFunctions = {
-			Key::esc, Key::print_screen, Key::scroll_lock, Key::pause_break,
-			Key::insert, Key::del, Key::home, Key::end, Key::page_up, Key::page_down
-		};
-		const KeyArray keyGroupArrows = { Key::arrow_top, Key::arrow_left, Key::arrow_bottom, Key::arrow_right };
-		const KeyArray keyGroupNumeric = {
-			Key::num_1, Key::num_2, Key::num_3, Key::num_4, Key::num_5,
-			Key::num_6, Key::num_7, Key::num_8, Key::num_9, Key::num_0, 
-			Key::num_dot, Key::num_enter, Key::num_plus, Key::num_minus,
-			Key::num_asterisk, Key::num_slash, Key::num_lock
-		};
-		const KeyArray keyGroupKeys = {
-			Key::a, Key::b, Key::c, Key::d, Key::e, Key::f, Key::g, Key::h, Key::i, Key::j, Key::k, Key::l, Key::m, 
-			Key::n, Key::o, Key::p, Key::q, Key::r, Key::s, Key::t, Key::u, Key::v, Key::w, Key::x, Key::y, Key::z,
-			Key::n1, Key::n2, Key::n3, Key::n4, Key::n5, Key::n6, Key::n7, Key::n8, Key::n9, Key::n0,
-			Key::enter, Key::backspace, Key::tab, Key::space, Key::minus, Key::equal,
-			Key::open_bracket, Key::close_bracket, Key::backslash, Key::dollar, Key::semicolon, Key::quote, Key::tilde,
-			Key::comma, Key::period, Key::slash, Key::caps_lock, Key::intl_backslash, Key::abnt_slash
-		};
-		
 		bool m_isOpen = false;
 		DeviceInfo currentDevice;
 		
 		#if defined(hidapi)
-			hid_device *m_hidHandle;
+			hid_device *m_hidHandle = NULL;
 		#elif defined(libusb)
 			bool m_isKernellDetached = false;
-			libusb_device_handle *m_hidHandle;
+			libusb_device_handle *m_hidHandle = NULL;
 			libusb_context *m_ctx = NULL;
 		#endif
 		
 		
 		bool sendDataInternal(byte_buffer_t &data);
+		// Where this keyboard keeps its lighting and its profile switch.
+		//
+		// HID++ 2.0 does not fix these: a device carries a table and the
+		// index has to be looked up in it. The numbers below are where a
+		// wired G815 happens to keep them, and they were hardcoded until a
+		// G915 turned up keeping the same two features at 0x0b and 0x15 —
+		// every packet was being addressed to whatever else lived at 0x10,
+		// accepted, and ignored. discoverFeatures() asks instead, and
+		// leaves these alone on a device that will not answer.
+		uint8_t featureLighting = 0x10;
+		uint8_t featureOnBoard = 0x11;
+		bool discoverFeatures();
 		byte_buffer_t getKeyGroupAddress(KeyAddressGroup keyAddressGroup);
 		
 };

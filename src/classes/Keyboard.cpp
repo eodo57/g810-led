@@ -33,11 +33,41 @@
 using namespace std;
 
 
+// wcstombs() does not terminate the buffer when the conversion fills it,
+// and returns (size_t)-1 with the buffer in an unspecified state when a
+// character has no representation in the current locale — in both cases
+// treating the buffer as a C string reads past it. These strings come
+// from the USB device (a hostile one can claim a supported id, and udev
+// runs us as root on every hotplug), so bound and terminate explicitly.
+static std::string fromDeviceString(const wchar_t *wide) {
+	if (wide == NULL)
+		return std::string();
+	char buffer[256];
+	size_t converted = wcstombs(buffer, wide, sizeof(buffer) - 1);
+	if (converted == (size_t)-1)
+		return std::string();
+	buffer[converted] = '\0';
+	return std::string(buffer);
+}
+
+
 
 LedKeyboard::~LedKeyboard() {
 	close();
 }
 
+
+// What to call a keyboard that cannot name itself.
+//
+// A device behind a Lightspeed receiver is presented by the kernel as one
+// of its own, but it inherits the receiver's strings, so it reports "USB
+// Receiver" — as a heading, as a chooser row, and in the status bar. The
+// name is the only thing about it that is wrong.
+static string nameFor(uint16_t vendorID, uint16_t productID,
+                      const string &reported) {
+	if (vendorID == 0x046d && productID == 0x407c) return "G915 (Lightspeed)";
+	return reported;
+}
 
 vector<LedKeyboard::DeviceInfo> LedKeyboard::listKeyboards() {
 	vector<LedKeyboard::DeviceInfo> deviceList;
@@ -55,26 +85,17 @@ vector<LedKeyboard::DeviceInfo> LedKeyboard::listKeyboards() {
 						DeviceInfo deviceInfo;
 						deviceInfo.vendorID=dev->vendor_id;
 						deviceInfo.productID=dev->product_id;
+						#if defined(HID_API_VERSION) && \
+						    HID_API_VERSION >= HID_API_MAKE_VERSION(0, 13, 0)
+							deviceInfo.bluetooth =
+								(dev->bus_type == HID_API_BUS_BLUETOOTH);
+						#endif
 
-						if (dev->serial_number != NULL) {
-							char buf[256];
-							wcstombs(buf, dev->serial_number, 256);
-							deviceInfo.serialNumber = string(buf);
-						}
-
-						if (dev->manufacturer_string != NULL)
-						{
-							char buf[256];
-							wcstombs(buf, dev->manufacturer_string, 256);
-							deviceInfo.manufacturer = string(buf);
-						}
-
-						if (dev->product_string != NULL)
-						{
-							char buf[256];
-							wcstombs(buf, dev->product_string, 256);
-							deviceInfo.product = string(buf);
-						}
+						deviceInfo.serialNumber = fromDeviceString(dev->serial_number);
+						deviceInfo.manufacturer = fromDeviceString(dev->manufacturer_string);
+						deviceInfo.product = nameFor(deviceInfo.vendorID,
+							deviceInfo.productID,
+							fromDeviceString(dev->product_string));
 
 						deviceList.push_back(deviceInfo);
 						dev = dev->next;
@@ -88,8 +109,12 @@ vector<LedKeyboard::DeviceInfo> LedKeyboard::listKeyboards() {
 		hid_exit();
 		
 	#elif defined(libusb)
+		// Enumeration must not touch m_ctx/m_hidHandle: those belong to
+		// an open device, and this is routinely called (GUI rescan) while
+		// one is open. It also used to init the member context but
+		// enumerate with the uninitialised local one.
 		libusb_context *ctx = NULL;
-		if(libusb_init(&m_ctx) < 0) return deviceList;
+		if(libusb_init(&ctx) < 0) return deviceList;
 		
 		libusb_device **devs;
 		ssize_t cnt = libusb_get_device_list(ctx, &devs);
@@ -105,29 +130,22 @@ vector<LedKeyboard::DeviceInfo> LedKeyboard::listKeyboards() {
 						deviceInfo.vendorID=desc.idVendor;
 						deviceInfo.productID=desc.idProduct;
 
-						if (libusb_open(device, &m_hidHandle) != 0)	continue;
+						libusb_device_handle *handle = NULL;
+						if (libusb_open(device, &handle) != 0)	continue;
 
-						if (libusb_get_string_descriptor_ascii(m_hidHandle, desc.iSerialNumber, buf, 256) >= 1) deviceInfo.serialNumber = string((char*)buf);
-						if (libusb_get_string_descriptor_ascii(m_hidHandle, desc.iManufacturer, buf, 256) >= 1) deviceInfo.manufacturer = string((char*)buf);
-						if (libusb_get_string_descriptor_ascii(m_hidHandle, desc.iProduct, buf, 256) >= 1) deviceInfo.product = string((char*)buf);
+						if (libusb_get_string_descriptor_ascii(handle, desc.iSerialNumber, buf, 256) >= 1) deviceInfo.serialNumber = string((char*)buf);
+						if (libusb_get_string_descriptor_ascii(handle, desc.iManufacturer, buf, 256) >= 1) deviceInfo.manufacturer = string((char*)buf);
+						if (libusb_get_string_descriptor_ascii(handle, desc.iProduct, buf, 256) >= 1) deviceInfo.product = string((char*)buf);
 
 						deviceList.push_back(deviceInfo);
-						libusb_close(m_hidHandle);
-						m_hidHandle = NULL;
+						libusb_close(handle);
 						break;
 					}
 				}
 			}
 		}
 		libusb_free_device_list(devs, 1);
-
-		if (m_hidHandle != NULL) {
-			libusb_close(m_hidHandle);
-			m_hidHandle = NULL;
-		}
-		
-		libusb_exit(m_ctx);
-		m_ctx = NULL;
+		libusb_exit(ctx);
 	#endif
 	
 	return deviceList;
@@ -157,35 +175,33 @@ bool LedKeyboard::open(uint16_t vendorID, uint16_t productID, string serial) {
 		wstring wideSerial;
 
 		if (!serial.empty()) {
+			// mbstowcs writes no terminator when the conversion exactly
+			// fills the destination, so keep a slot for it: constructing
+			// the wstring would otherwise read past the buffer.
 			wchar_t tempSerial[256];
-			if (mbstowcs(tempSerial, serial.c_str(), 256) < 1) return false;
+			size_t converted = mbstowcs(tempSerial, serial.c_str(),
+			                            sizeof(tempSerial) / sizeof(tempSerial[0]) - 1);
+			if (converted == (size_t)-1 || converted < 1) return false;
+			tempSerial[converted] = L'\0';
 			wideSerial = wstring(tempSerial);
 		}
 
 		while (dev) {
 			for (int i=0; i<(int)SupportedKeyboards.size(); i++) {
 				if (dev->vendor_id == SupportedKeyboards[i][0] && dev->product_id == SupportedKeyboards[i][1]) {
-					if (!serial.empty() && dev->serial_number != NULL && wideSerial.compare(dev->serial_number) != 0) break; //Serial didn't match
+					// A device that publishes no serial cannot satisfy a
+					// request for a specific one; it used to pass the filter.
+					if (!serial.empty() && (dev->serial_number == NULL ||
+					    wideSerial.compare(dev->serial_number) != 0)) break;
 
-					if (dev->serial_number != NULL) {
-						char buf[256];
-						wcstombs(buf,dev->serial_number,256);
-						currentDevice.serialNumber=string(buf);
-					}
-
-					if (dev->manufacturer_string != NULL)
-					{
-						char buf[256];
-						wcstombs(buf,dev->manufacturer_string,256);
-						currentDevice.manufacturer = string(buf);
-					}
-
-					if (dev->product_string != NULL)
-					{
-						char buf[256];
-						wcstombs(buf,dev->product_string,256);
-						currentDevice.product = string(buf);
-					}
+					currentDevice.serialNumber = fromDeviceString(dev->serial_number);
+					currentDevice.manufacturer = fromDeviceString(dev->manufacturer_string);
+					// From the enumeration, not from currentDevice: the
+					// two ids below are not filled in until the next
+					// lines, so asking those would be asking what this
+					// device was before it was this one.
+					currentDevice.product = nameFor(dev->vendor_id,
+						dev->product_id, fromDeviceString(dev->product_string));
 
 					currentDevice.vendorID = dev->vendor_id;
 					currentDevice.productID = dev->product_id;
@@ -217,6 +233,11 @@ bool LedKeyboard::open(uint16_t vendorID, uint16_t productID, string serial) {
 		}
 
 		m_isOpen = true;
+		// A wireless keyboard keeps its features wherever it likes, so ask
+		// where before addressing them. Silence is harmless: a device that
+		// does not answer keeps the wired defaults, which is what every
+		// keyboard supported before this one used.
+		discoverFeatures();
 		return true;
 
 	#elif defined(libusb)
@@ -295,6 +316,7 @@ bool LedKeyboard::open(uint16_t vendorID, uint16_t productID, string serial) {
 			}
 			libusb_free_device_list(devs, 1);
 		}
+
 
 		if (currentDevice.model == KeyboardModel::unknown) {
 			libusb_exit(m_ctx);
@@ -391,7 +413,7 @@ bool LedKeyboard::commit() {
 			data = { 0x11, 0xff, 0x0c, 0x5a };
 			break;
 		case KeyboardModel::g815:
-			data = { 0x11, 0xff, 0x10, 0x7f };
+			data = { 0x11, 0xff, featureLighting, 0x7f };
 			break;
 		case KeyboardModel::g910:
 			data = { 0x11, 0xff, 0x0f, 0x5d };
@@ -419,7 +441,7 @@ bool LedKeyboard::setKeys(KeyValueArray keyValues) {
 	
 	switch (currentDevice.model) {
 		case KeyboardModel::g815:
-			for (uint8_t i = 0; i < keyValues.size(); i++) {
+			for (size_t i = 0; i < keyValues.size(); i++) {
 				uint32_t colorkey = static_cast<uint32_t>(keyValues[i].color.red | keyValues[i].color.green << 8 | keyValues[i].color.blue << 16 );
 				if (KeyByColors.count(colorkey) == 0) KeyByColors.insert(pair<uint32_t, vector<KeyValue>>(colorkey, {}));
 				KeyByColors[colorkey].push_back(keyValues[i]);
@@ -427,10 +449,10 @@ bool LedKeyboard::setKeys(KeyValueArray keyValues) {
 			
 			for (auto& x: KeyByColors) {
 				if (x.second.size() > 0) {
-					uint8_t gi = 0;
+					size_t gi = 0;
 					while (gi < x.second.size()) {
 						size_t data_size = 20;
-						byte_buffer_t data = { 0x11, 0xff, 0x10, 0x6c };
+						byte_buffer_t data = { 0x11, 0xff, featureLighting, 0x6c };
 						data.push_back(x.second[0].color.red);
 						data.push_back(x.second[0].color.green);
 						data.push_back(x.second[0].color.blue);
@@ -511,7 +533,7 @@ bool LedKeyboard::setKeys(KeyValueArray keyValues) {
 				{} // Keys AddressGroup
 			};
 			
-			for (uint8_t i = 0; i < keyValues.size(); i++) {
+			for (size_t i = 0; i < keyValues.size(); i++) {
 				switch(static_cast<LedKeyboard::KeyAddressGroup>(static_cast<uint16_t>(keyValues[i].key) >> 8 )) {
 					case LedKeyboard::KeyAddressGroup::logo:
 						switch (currentDevice.model) {
@@ -578,7 +600,7 @@ bool LedKeyboard::setKeys(KeyValueArray keyValues) {
 				
 				if (SortedKeys[kag].size() > 0) {
 					
-					uint8_t gi = 0;
+					size_t gi = 0;
 					while (gi < SortedKeys[kag].size()) {
 						
 						size_t data_size = 0;
@@ -638,48 +660,56 @@ bool LedKeyboard::setKeys(KeyValueArray keyValues) {
 	return retval;
 }
 
-bool LedKeyboard::setGroupKeys(KeyGroup keyGroup, LedKeyboard::Color color) {
-	KeyValueArray keyValues;
-	
-	KeyArray keyArray;
-	
+std::vector<LedKeyboard::Key> LedKeyboard::keysForGroup(KeyGroup keyGroup) {
 	switch (keyGroup) {
 		case KeyGroup::logo:
-			keyArray = keyGroupLogo;
-			break;
+			return { Key::logo, Key::logo2 };
 		case KeyGroup::indicators:
-			keyArray = keyGroupIndicators;
-			break;
-		case KeyGroup::gkeys:
-			keyArray = keyGroupGKeys;
-			break;
+			return { Key::caps, Key::num, Key::scroll, Key::game, Key::backlight };
 		case KeyGroup::multimedia:
-			keyArray = keyGroupMultimedia;
-			break;
+			return { Key::next, Key::prev, Key::stop, Key::play, Key::mute };
+		case KeyGroup::gkeys:
+			return { Key::g1, Key::g2, Key::g3, Key::g4, Key::g5,
+			         Key::g6, Key::g7, Key::g8, Key::g9 };
 		case KeyGroup::fkeys:
-			keyArray = keyGroupFKeys;
-			break;
+			return { Key::f1, Key::f2, Key::f3, Key::f4, Key::f5, Key::f6,
+			         Key::f7, Key::f8, Key::f9, Key::f10, Key::f11, Key::f12 };
 		case KeyGroup::modifiers:
-			keyArray = keyGroupModifiers;
-			break;
-		case KeyGroup::arrows:
-			keyArray = keyGroupArrows;
-			break;
-		case KeyGroup::numeric:
-			keyArray = keyGroupNumeric;
-			break;
+			return { Key::shift_left, Key::ctrl_left, Key::win_left, Key::alt_left,
+			         Key::alt_right, Key::win_right, Key::ctrl_right, Key::shift_right,
+			         Key::menu };
 		case KeyGroup::functions:
-			keyArray = keyGroupFunctions;
-			break;
+			return { Key::esc, Key::print_screen, Key::scroll_lock, Key::pause_break,
+			         Key::insert, Key::del, Key::home, Key::end, Key::page_up,
+			         Key::page_down };
+		case KeyGroup::arrows:
+			return { Key::arrow_top, Key::arrow_left, Key::arrow_bottom, Key::arrow_right };
+		case KeyGroup::numeric:
+			return { Key::num_1, Key::num_2, Key::num_3, Key::num_4, Key::num_5,
+			         Key::num_6, Key::num_7, Key::num_8, Key::num_9, Key::num_0,
+			         Key::num_dot, Key::num_enter, Key::num_plus, Key::num_minus,
+			         Key::num_asterisk, Key::num_slash, Key::num_lock };
 		case KeyGroup::keys:
-			keyArray = keyGroupKeys;
-			break;
+			return { Key::a, Key::b, Key::c, Key::d, Key::e, Key::f, Key::g, Key::h,
+			         Key::i, Key::j, Key::k, Key::l, Key::m, Key::n, Key::o, Key::p,
+			         Key::q, Key::r, Key::s, Key::t, Key::u, Key::v, Key::w, Key::x,
+			         Key::y, Key::z,
+			         Key::n1, Key::n2, Key::n3, Key::n4, Key::n5, Key::n6, Key::n7,
+			         Key::n8, Key::n9, Key::n0,
+			         Key::enter, Key::backspace, Key::tab, Key::space, Key::minus,
+			         Key::equal, Key::open_bracket, Key::close_bracket, Key::backslash,
+			         Key::dollar, Key::semicolon, Key::quote, Key::tilde, Key::comma,
+			         Key::period, Key::slash, Key::caps_lock, Key::intl_backslash,
+			         Key::abnt_slash };
 		default:
-			break;
+			return {};
 	}
-	
+}
+
+bool LedKeyboard::setGroupKeys(KeyGroup keyGroup, LedKeyboard::Color color) {
+	KeyValueArray keyValues;
+	std::vector<Key> keyArray = keysForGroup(keyGroup);
 	for (uint8_t i = 0; i < keyArray.size(); i++) keyValues.push_back({keyArray[i], color});
-	
 	return setKeys(keyValues);
 }
 
@@ -691,9 +721,8 @@ bool LedKeyboard::setAllKeys(LedKeyboard::Color color) {
 			for (uint8_t rIndex=0x01; rIndex <= 0x05; rIndex++) if (! setRegion(rIndex, color)) return false;
 			return true;
 		case KeyboardModel::g413:
-			setNativeEffect(NativeEffect::color, NativeEffectPart::keys, std::chrono::seconds(0), color,
-					NativeEffectStorage::none);
-			return true;
+			return setNativeEffect(NativeEffect::color, NativeEffectPart::keys,
+					std::chrono::seconds(0), color, NativeEffectStorage::none);
 		case KeyboardModel::g410:
 		case KeyboardModel::g512:
 		case KeyboardModel::g513:
@@ -701,18 +730,19 @@ bool LedKeyboard::setAllKeys(LedKeyboard::Color color) {
 		case KeyboardModel::g810:
 		case KeyboardModel::g815:
 		case KeyboardModel::g910:
-		case KeyboardModel::gpro:
-			for (uint8_t i = 0; i < keyGroupLogo.size(); i++) keyValues.push_back({keyGroupLogo[i], color});
-			for (uint8_t i = 0; i < keyGroupIndicators.size(); i++) keyValues.push_back({keyGroupIndicators[i], color});
-			for (uint8_t i = 0; i < keyGroupMultimedia.size(); i++) keyValues.push_back({keyGroupMultimedia[i], color});
-			for (uint8_t i = 0; i < keyGroupGKeys.size(); i++) keyValues.push_back({keyGroupGKeys[i], color});
-			for (uint8_t i = 0; i < keyGroupFKeys.size(); i++) keyValues.push_back({keyGroupFKeys[i], color});
-			for (uint8_t i = 0; i < keyGroupFunctions.size(); i++) keyValues.push_back({keyGroupFunctions[i], color});
-			for (uint8_t i = 0; i < keyGroupArrows.size(); i++) keyValues.push_back({keyGroupArrows[i], color});
-			for (uint8_t i = 0; i < keyGroupNumeric.size(); i++) keyValues.push_back({keyGroupNumeric[i], color});
-			for (uint8_t i = 0; i < keyGroupModifiers.size(); i++) keyValues.push_back({keyGroupModifiers[i], color});
-			for (uint8_t i = 0; i < keyGroupKeys.size(); i++) keyValues.push_back({keyGroupKeys[i], color});
+		case KeyboardModel::gpro: {
+			static const KeyGroup groups[] = {
+				KeyGroup::logo, KeyGroup::indicators, KeyGroup::multimedia,
+				KeyGroup::gkeys, KeyGroup::fkeys, KeyGroup::functions,
+				KeyGroup::arrows, KeyGroup::numeric, KeyGroup::modifiers,
+				KeyGroup::keys
+			};
+			for (KeyGroup group : groups) {
+				std::vector<Key> keys = keysForGroup(group);
+				for (Key key : keys) keyValues.push_back({key, color});
+			}
 			return setKeys(keyValues);
+		}
 		default:
 			return false;
 	}
@@ -846,13 +876,18 @@ bool LedKeyboard::setStartupMode(StartupMode startupMode) {
 	switch (currentDevice.model) {
 		case KeyboardModel::g213:
 		case KeyboardModel::g410:
+		case KeyboardModel::g512:
+		case KeyboardModel::g513:
 		case KeyboardModel::g610:
 		case KeyboardModel::g810:
 		case KeyboardModel::gpro:
+			// g512/g513 speak the same protocol as the g810 and are
+			// listed with poweronfx in help.h, but were missing here, so
+			// the documented -s option always failed on them.
 			data = { 0x11, 0xff, 0x0d, 0x5a, 0x00, 0x01 };
 			break;
 		case KeyboardModel::g910:
-			data = { 0x11, 0xff, 0x10, 0x5e, 0x00, 0x01 };
+			data = { 0x11, 0xff, featureLighting, 0x5e, 0x00, 0x01 };
 			break;
 		default:
 			return false;
@@ -866,7 +901,7 @@ bool LedKeyboard::setOnBoardMode(OnBoardMode onBoardMode) {
 	byte_buffer_t data;
 	switch (currentDevice.model) {
 		case KeyboardModel::g815:
-			data = { 0x11, 0xff, 0x11, 0x1a, static_cast<uint8_t>(onBoardMode) };
+			data = { 0x11, 0xff, featureOnBoard, 0x1a, static_cast<uint8_t>(onBoardMode) };
 			data.resize(20, 0x00);
 			return sendDataInternal(data);
 		default:
@@ -1022,20 +1057,57 @@ bool LedKeyboard::setNativeEffect(NativeEffect effect, NativeEffectPart part,
 }
 
 
+// Ask the keyboard where it keeps the two features this code drives.
+//
+// Only hidapi can do this: it needs a reply, and the libusb path here is
+// write-only. A device that does not answer keeps the wired G815's
+// numbers, which is what every keyboard supported before this did.
+bool LedKeyboard::discoverFeatures() {
+	#if defined(hidapi)
+		if (!m_isOpen || !m_hidHandle) return false;
+		// Byte 3 of a request is (function << 4) | a software id of our
+		// choosing, and the reply echoes it, which is what tells our
+		// answer apart from the traffic a keyboard sends unprompted.
+		const uint8_t software = 0x05;
+		struct { uint16_t feature; uint8_t *into; } wanted[] = {
+			{ 0x8081, &featureLighting },   // per-key lighting
+			{ 0x8100, &featureOnBoard },    // on-board profiles
+		};
+		bool answered = false;
+		for (size_t i = 0; i < sizeof(wanted) / sizeof(wanted[0]); i++) {
+			uint8_t out[7] = { 0x10, 0xff, 0x00, (uint8_t)((0 << 4) | software),
+				(uint8_t)(wanted[i].feature >> 8),
+				(uint8_t)(wanted[i].feature & 0xff), 0x00 };
+			if (hid_write(m_hidHandle, out, sizeof(out)) < 0) continue;
+			for (int attempt = 0; attempt < 8; attempt++) {
+				uint8_t in[64] = {0};
+				const int got = hid_read_timeout(m_hidHandle, in, sizeof(in), 200);
+				if (got <= 0) continue;
+				if (in[2] == 0x8f) break;             // it has no such feature
+				if (in[3] != out[3]) continue;        // somebody else's reply
+				if (in[4] != 0x00) {                  // 0 means not present
+					*wanted[i].into = in[4];
+					answered = true;
+				}
+				break;
+			}
+		}
+		return answered;
+	#else
+		return false;
+	#endif
+}
+
 bool LedKeyboard::sendDataInternal(byte_buffer_t &data) {
 	if (data.size() > 0) {
 		#if defined(hidapi)
-			if (! open(currentDevice.vendorID, currentDevice.productID, currentDevice.serialNumber)) return false;
+			if (! m_isOpen &&
+			    ! open(currentDevice.vendorID, currentDevice.productID, currentDevice.serialNumber))
+				return false;
 			if (hid_write(m_hidHandle, const_cast<unsigned char*>(data.data()), data.size()) < 0) {
 				std::cout<<"Error: Can not write to hidraw, try with the libusb version"<<std::endl;
 				return false;
 			}
-			close();
-			/*
-			byte_buffer_t data2;
-			data2.resize(21, 0x00);
-			hid_read_timeout(m_hidHandle, const_cast<unsigned char*>(data2.data()), data2.size(), 1);
-			*/
 			return true;
 		#elif defined(libusb)
 			if (! m_isOpen) return false;
@@ -1099,15 +1171,15 @@ LedKeyboard::byte_buffer_t LedKeyboard::getKeyGroupAddress(LedKeyboard::KeyAddre
 		case KeyboardModel::g815:
 			switch (keyAddressGroup) {
 				case LedKeyboard::KeyAddressGroup::logo:
-					return { 0x11, 0xff, 0x10, 0x1c };
+					return { 0x11, 0xff, featureLighting, 0x1c };
 				case LedKeyboard::KeyAddressGroup::indicators:
-					return { 0x11, 0xff, 0x10, 0x1c };
+					return { 0x11, 0xff, featureLighting, 0x1c };
 				case LedKeyboard::KeyAddressGroup::gkeys:
-					return { 0x11, 0xff, 0x10, 0x1c };
+					return { 0x11, 0xff, featureLighting, 0x1c };
 				case LedKeyboard::KeyAddressGroup::multimedia:
-					return { 0x11, 0xff, 0x10, 0x1c };
+					return { 0x11, 0xff, featureLighting, 0x1c };
 				case LedKeyboard::KeyAddressGroup::keys:
-					return { 0x11, 0xff, 0x10, 0x1c };
+					return { 0x11, 0xff, featureLighting, 0x1c };
 			}
 			break;
 		case KeyboardModel::g910:

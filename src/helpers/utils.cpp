@@ -16,10 +16,41 @@
 
 #include "utils.h"
 
-#include <iostream>
 #include <algorithm>
+#include <cctype>
+#include <cstdlib>
+#include <iostream>
+#include <map>
+#include <string>
 
 #include "../classes/Keyboard.h"
+
+
+namespace {
+	
+	// These parsers are fed straight from profile files and the command
+	// line, so a stray character must be a parse failure, never an
+	// exception: std::stoul throws, and nothing up the call chain (the
+	// CLI's parseProfile, the GUI's profile loader) catches it.
+	bool isHex(const std::string &val) {
+		if (val.empty()) return false;
+		for (size_t i = 0; i < val.length(); ++i)
+			if (!std::isxdigit((unsigned char)val[i])) return false;
+		return true;
+	}
+	
+	bool isDecimal(const std::string &val) {
+		if (val.empty()) return false;
+		for (size_t i = 0; i < val.length(); ++i)
+			if (!std::isdigit((unsigned char)val[i])) return false;
+		return true;
+	}
+	
+	unsigned long toULong(const std::string &val, int base) {
+		return std::strtoul(val.c_str(), NULL, base);
+	}
+	
+}
 
 
 namespace utils {
@@ -52,6 +83,8 @@ namespace utils {
 		else if (val == "hwave") nativeEffect = LedKeyboard::NativeEffect::hwave;
 		else if (val == "vwave") nativeEffect = LedKeyboard::NativeEffect::vwave;
 		else if (val == "cwave") nativeEffect = LedKeyboard::NativeEffect::cwave;
+		else if (val == "off") nativeEffect = LedKeyboard::NativeEffect::off;
+		else if (val == "ripple") nativeEffect = LedKeyboard::NativeEffect::ripple;
 		else return false;
 		return true;
 	}
@@ -202,6 +235,108 @@ namespace utils {
 		else return false;
 		return true;
 	}
+
+	std::string keyName(LedKeyboard::Key key) {
+		static const std::map<LedKeyboard::Key, const char *> names = {
+			{LedKeyboard::Key::logo, "logo"},
+			{LedKeyboard::Key::logo2, "logo2"},
+			{LedKeyboard::Key::backlight, "backlight"},
+			{LedKeyboard::Key::game, "game"},
+			{LedKeyboard::Key::caps, "caps"},
+			{LedKeyboard::Key::scroll, "scroll"},
+			{LedKeyboard::Key::num, "num"},
+			{LedKeyboard::Key::next, "next"},
+			{LedKeyboard::Key::prev, "prev"},
+			{LedKeyboard::Key::stop, "stop"},
+			{LedKeyboard::Key::play, "play"},
+			{LedKeyboard::Key::mute, "mute"},
+			{LedKeyboard::Key::a, "a"}, {LedKeyboard::Key::b, "b"},
+			{LedKeyboard::Key::c, "c"}, {LedKeyboard::Key::d, "d"},
+			{LedKeyboard::Key::e, "e"}, {LedKeyboard::Key::f, "f"},
+			{LedKeyboard::Key::g, "g"}, {LedKeyboard::Key::h, "h"},
+			{LedKeyboard::Key::i, "i"}, {LedKeyboard::Key::j, "j"},
+			{LedKeyboard::Key::k, "k"}, {LedKeyboard::Key::l, "l"},
+			{LedKeyboard::Key::m, "m"}, {LedKeyboard::Key::n, "n"},
+			{LedKeyboard::Key::o, "o"}, {LedKeyboard::Key::p, "p"},
+			{LedKeyboard::Key::q, "q"}, {LedKeyboard::Key::r, "r"},
+			{LedKeyboard::Key::s, "s"}, {LedKeyboard::Key::t, "t"},
+			{LedKeyboard::Key::u, "u"}, {LedKeyboard::Key::v, "v"},
+			{LedKeyboard::Key::w, "w"}, {LedKeyboard::Key::x, "x"},
+			{LedKeyboard::Key::y, "y"}, {LedKeyboard::Key::z, "z"},
+			{LedKeyboard::Key::n1, "1"}, {LedKeyboard::Key::n2, "2"},
+			{LedKeyboard::Key::n3, "3"}, {LedKeyboard::Key::n4, "4"},
+			{LedKeyboard::Key::n5, "5"}, {LedKeyboard::Key::n6, "6"},
+			{LedKeyboard::Key::n7, "7"}, {LedKeyboard::Key::n8, "8"},
+			{LedKeyboard::Key::n9, "9"}, {LedKeyboard::Key::n0, "0"},
+			{LedKeyboard::Key::enter, "enter"},
+			{LedKeyboard::Key::esc, "esc"},
+			{LedKeyboard::Key::backspace, "backspace"},
+			{LedKeyboard::Key::tab, "tab"},
+			{LedKeyboard::Key::space, "space"},
+			{LedKeyboard::Key::tilde, "tilde"},
+			{LedKeyboard::Key::minus, "minus"},
+			{LedKeyboard::Key::equal, "equal"},
+			{LedKeyboard::Key::open_bracket, "open_bracket"},
+			{LedKeyboard::Key::close_bracket, "close_bracket"},
+			{LedKeyboard::Key::backslash, "backslash"},
+			{LedKeyboard::Key::semicolon, "semicolon"},
+			{LedKeyboard::Key::quote, "quote"},
+			{LedKeyboard::Key::dollar, "dollar"},
+			{LedKeyboard::Key::comma, "comma"},
+			{LedKeyboard::Key::period, "period"},
+			{LedKeyboard::Key::slash, "slash"},
+			{LedKeyboard::Key::caps_lock, "caps_lock"},
+			{LedKeyboard::Key::f1, "f1"}, {LedKeyboard::Key::f2, "f2"},
+			{LedKeyboard::Key::f3, "f3"}, {LedKeyboard::Key::f4, "f4"},
+			{LedKeyboard::Key::f5, "f5"}, {LedKeyboard::Key::f6, "f6"},
+			{LedKeyboard::Key::f7, "f7"}, {LedKeyboard::Key::f8, "f8"},
+			{LedKeyboard::Key::f9, "f9"}, {LedKeyboard::Key::f10, "f10"},
+			{LedKeyboard::Key::f11, "f11"}, {LedKeyboard::Key::f12, "f12"},
+			{LedKeyboard::Key::print_screen, "print_screen"},
+			{LedKeyboard::Key::scroll_lock, "scroll_lock"},
+			{LedKeyboard::Key::pause_break, "pause_break"},
+			{LedKeyboard::Key::insert, "insert"},
+			{LedKeyboard::Key::home, "home"},
+			{LedKeyboard::Key::page_up, "page_up"},
+			{LedKeyboard::Key::del, "del"},
+			{LedKeyboard::Key::end, "end"},
+			{LedKeyboard::Key::page_down, "page_down"},
+			{LedKeyboard::Key::arrow_right, "arrow_right"},
+			{LedKeyboard::Key::arrow_left, "arrow_left"},
+			{LedKeyboard::Key::arrow_bottom, "arrow_bottom"},
+			{LedKeyboard::Key::arrow_top, "arrow_top"},
+			{LedKeyboard::Key::num_lock, "num_lock"},
+			{LedKeyboard::Key::num_slash, "num_slash"},
+			{LedKeyboard::Key::num_asterisk, "num_asterisk"},
+			{LedKeyboard::Key::num_minus, "num_minus"},
+			{LedKeyboard::Key::num_plus, "num_plus"},
+			{LedKeyboard::Key::num_enter, "numenter"},
+			{LedKeyboard::Key::num_1, "num1"}, {LedKeyboard::Key::num_2, "num2"},
+			{LedKeyboard::Key::num_3, "num3"}, {LedKeyboard::Key::num_4, "num4"},
+			{LedKeyboard::Key::num_5, "num5"}, {LedKeyboard::Key::num_6, "num6"},
+			{LedKeyboard::Key::num_7, "num7"}, {LedKeyboard::Key::num_8, "num8"},
+			{LedKeyboard::Key::num_9, "num9"}, {LedKeyboard::Key::num_0, "num0"},
+			{LedKeyboard::Key::num_dot, "num_period"},
+			{LedKeyboard::Key::intl_backslash, "intl_backslash"},
+			{LedKeyboard::Key::menu, "menu"},
+			{LedKeyboard::Key::abnt_slash, "abnt_slash"},
+			{LedKeyboard::Key::ctrl_left, "ctrl_left"},
+			{LedKeyboard::Key::shift_left, "shift_left"},
+			{LedKeyboard::Key::alt_left, "alt_left"},
+			{LedKeyboard::Key::win_left, "win_left"},
+			{LedKeyboard::Key::ctrl_right, "ctrl_right"},
+			{LedKeyboard::Key::shift_right, "shift_right"},
+			{LedKeyboard::Key::alt_right, "alt_right"},
+			{LedKeyboard::Key::win_right, "win_right"},
+			{LedKeyboard::Key::g1, "g1"}, {LedKeyboard::Key::g2, "g2"},
+			{LedKeyboard::Key::g3, "g3"}, {LedKeyboard::Key::g4, "g4"},
+			{LedKeyboard::Key::g5, "g5"}, {LedKeyboard::Key::g6, "g6"},
+			{LedKeyboard::Key::g7, "g7"}, {LedKeyboard::Key::g8, "g8"},
+			{LedKeyboard::Key::g9, "g9"}
+		};
+		std::map<LedKeyboard::Key, const char *>::const_iterator it = names.find(key);
+		return it == names.end() ? "" : it->second;
+	}
 	
 	bool parseKeyGroup(std::string val, LedKeyboard::KeyGroup &keyGroup) {
 		if (val == "logo") keyGroup = LedKeyboard::KeyGroup::logo;
@@ -221,22 +356,31 @@ namespace utils {
 	bool parseColor(std::string val, LedKeyboard::Color &color) {
 		if (val.length() == 2) val = val + "0000";  // For G610
 		if (val.length() != 6) return false;
-		color.red = std::stoul("0x"+val.substr(0,2), nullptr, 16);
-		color.green = std::stoul("0x"+val.substr(2,2), nullptr, 16);
-		color.blue = std::stoul("0x"+val.substr(4,2), nullptr, 16);
+		if (!isHex(val)) return false;
+		color.red = (uint8_t)toULong(val.substr(0,2), 16);
+		color.green = (uint8_t)toULong(val.substr(2,2), 16);
+		color.blue = (uint8_t)toULong(val.substr(4,2), 16);
 		return true;
 	}
 	
 	bool parsePeriod(std::string val, std::chrono::duration<uint16_t, std::milli> &period) {
+		// "<n>ms", "<n>s", or the CLI's two-digit hex byte (in 256 ms units).
 		if (!val.empty() && val.back() == 's') {
-			if ((val.length() >= 2) && (val[val.length()-2] == 'm'))
-				period = std::chrono::milliseconds(std::stoul(val, nullptr));
-			else
-				period = std::chrono::seconds(std::stoul(val, nullptr));
+			bool milli = (val.length() >= 2) && (val[val.length()-2] == 'm');
+			std::string digits = val.substr(0, val.length() - (milli ? 2 : 1));
+			if (!isDecimal(digits)) return false;
+			unsigned long value = toULong(digits, 10);
+			if (!milli) {
+				if (value > 65) return false;  // would overflow the uint16_t ms
+				value *= 1000;
+			}
+			if (value > 65535) return false;
+			period = std::chrono::milliseconds(value);
 		} else {
 			if (val.length() == 1) val = "0" + val;
 			if (val.length() != 2) return false;
-			period = std::chrono::milliseconds(std::stoul("0x" + val, nullptr, 16) << 8);
+			if (!isHex(val)) return false;
+			period = std::chrono::milliseconds(toULong(val, 16) << 8);
 		}
 		return true;
 	}
@@ -244,7 +388,8 @@ namespace utils {
 	bool parseUInt8(std::string val, uint8_t &uint8) {
 		if (val.length() == 1) val = "0" + val;
 		if (val.length() != 2) return false;
-		uint8 = std::stoul("0x" + val, nullptr, 16);
+		if (!isHex(val)) return false;
+		uint8 = (uint8_t)toULong(val, 16);
 		return true;
 	}
 	
@@ -253,7 +398,8 @@ namespace utils {
 		if (val.length() == 2) val = "0" + val;
 		if (val.length() == 3) val = "0" + val;
 		if (val.length() != 4) return false;
-		uint16 = std::stoul("0x" + val, nullptr, 16);
+		if (!isHex(val)) return false;
+		uint16 = (uint16_t)toULong(val, 16);
 		return true;
 	}
 	

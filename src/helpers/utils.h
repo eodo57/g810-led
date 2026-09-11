@@ -19,6 +19,7 @@
 
 #include <chrono>
 #include <iostream>
+#include <string>
 #include "../classes/Keyboard.h"
 
 namespace utils {
@@ -30,6 +31,7 @@ namespace utils {
 	bool parseNativeEffect(std::string val, LedKeyboard::NativeEffect &nativeEffect);
 	bool parseNativeEffectPart(std::string val, LedKeyboard::NativeEffectPart &nativeEffectPart);
 	bool parseKey(std::string val, LedKeyboard::Key &key);
+	std::string keyName(LedKeyboard::Key key);
 	bool parseKeyGroup(std::string val, LedKeyboard::KeyGroup &keyGroup);
 	bool parseColor(std::string val, LedKeyboard::Color &color);
 	bool parsePeriod(std::string val, std::chrono::duration<uint16_t, std::milli> &period);

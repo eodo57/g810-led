@@ -17,7 +17,11 @@
 #ifndef HELP_HELPER
 #define HELP_HELPER
 
+#include <cstdint>
 #include <iostream>
+#include <string>
+
+#include "../classes/Keyboard.h"
 
 namespace help {
 	
@@ -53,12 +57,20 @@ namespace help {
 		g610 = intensity | commit | logo1 | numpad | multimedia | setall | setgroup | setkey | setindicators | poweronfx | userstoredlighting,
 		g810 = rgb | commit | logo1 | numpad | multimedia | setall | setgroup | setkey | setindicators | poweronfx,
 		g815 = rgb | commit | logo1 | numpad | multimedia | gkeys | setall | setgroup | setkey | setindicators | onboardmode,
-		g910 = rgb | commit | logo1 | logo2 | numpad | multimedia | gkeys | setall | setgroup | setkey | setindicators | poweronfx | userstoredlighting,
+		// No multimedia: getKeyGroupAddress() has no address for that
+		// group on the g910, so setKeys silently drops those keys —
+		// advertising the group only produced controls that do nothing.
+		g910 = rgb | commit | logo1 | logo2 | numpad | gkeys | setall | setgroup | setkey | setindicators | poweronfx | userstoredlighting,
 		gpro = rgb | commit | logo1 | setall | setgroup | setkey | setindicators | poweronfx | userstoredlighting
 	};
 	inline KeyboardFeatures operator|(KeyboardFeatures a, KeyboardFeatures b);
-	
+	inline bool hasFeature(KeyboardFeatures features, KeyboardFeatures flag) {
+		return (static_cast<uint16_t>(features) & static_cast<uint16_t>(flag)) ==
+		       static_cast<uint16_t>(flag);
+	}
+
 	KeyboardFeatures getKeyboardFeatures(std::string cmdName);
+	KeyboardFeatures getKeyboardFeatures(LedKeyboard::KeyboardModel model);
 	
 	void usage(char *arg0);
 	void keys(char *arg0);
